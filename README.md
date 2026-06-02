@@ -4,7 +4,18 @@ Ask a question about your data in plain English. An autonomous agent inspects th
 database schema, writes SQL, runs it, **fixes its own queries when they error**, and
 returns a plain-language answer with a chart.
 
-Powered by the **free** [Google Gemini API](https://aistudio.google.com/app/apikey).
+Built as a **harness + tools + policies**:
+
+- **Harness** — a [LangGraph](https://langchain-ai.github.io/langgraph/) agent loop
+  drives the model: *think → call a tool → observe → repeat* until it's done.
+- **Tools** — the model can only act through explicit, named functions
+  (`list_tables`, `get_schema`, `run_sql`, `submit_answer`).
+- **Policies** — every consequential call is gated by a policy engine
+  (read-only SQL, table allowlist, step/query/row budgets) *before* it runs.
+
+Powered by the **free** [Google Gemini API](https://aistudio.google.com/app/apikey)
+via `langchain-google-genai`. LangGraph and LangChain are open source — the whole
+stack is free.
 
 ---
 
@@ -14,18 +25,23 @@ Powered by the **free** [Google Gemini API](https://aistudio.google.com/app/apik
 Your question
      │
      ▼
-1. 🔍 Inspect schema     — read tables, columns, sample rows
-2. ✍️  Write SQL          — Gemini generates a read-only SELECT
-3. ▶️  Run it             — execute against SQLite
-4. 🔧 Self-fix on error  — feed the DB error back to Gemini and retry (up to 3×)
-5. 💬 Answer + chart     — plain-language summary + a chart spec, rendered with Plotly
+  ┌────────────┐   wants to use a tool?   ┌──────────────────────────┐
+  │   agent    ├──────────  yes  ────────▶│  tools (policy-gated)    │
+  │  (Gemini)  │◀────────  observation  ──┤  list_tables / get_schema│
+  └─────┬──────┘                          │  run_sql / submit_answer │
+        │ submit_answer / budget hit      └──────────────────────────┘
+        ▼
+   answer + chart
 ```
 
-Every step is recorded in an **agent trace** you can expand in the UI.
+The model decides each step; the harness just loops and the policy engine enforces
+the rules. Every step (reasoning, tool calls, policy blocks, errors) is recorded in
+an **agent trace** you can expand in the UI.
 
-The agent is **read-only by design**: generated queries are validated to be a single
-`SELECT`/`WITH` statement and the database is opened in read-only mode, so a
-hallucinated `DROP`/`UPDATE` can never touch your data.
+The agent is **read-only by design**: the policy engine rejects anything that isn't a
+single `SELECT`/`WITH` statement *and* the database is opened in read-only mode, so a
+hallucinated `DROP`/`UPDATE` can never touch your data. Policy rejections are fed back
+to the model as observations, so it self-corrects just like it does on a SQL error.
 
 ## Quickstart
 
@@ -78,9 +94,32 @@ introspects whatever schema it finds.
 app.py                       Streamlit UI
 seed_data.py                 Generates the sample SQLite database
 agentic_analytics/
-  ├── agent.py               The autonomous loop (schema → SQL → run → self-fix → answer)
-  ├── database.py            Read-only SQLite access + schema introspection
-  └── gemini_client.py       Wrapper around the Gemini API
+  ├── graph.py               Harness: the LangGraph agent loop
+  ├── tools.py               Tools the model can call (list_tables, get_schema, run_sql, submit_answer)
+  ├── policies.py            Policy engine: read-only SQL, allowlist, step/query/row budgets
+  ├── llm.py                 Gemini chat model via langchain-google-genai
+  ├── state.py               Trace types + the shared per-question run context
+  ├── agent.py               Facade: runs one question through the graph → AgentResult
+  └── database.py            Read-only SQLite access + schema introspection
+```
+
+### Tuning the policies
+
+Pass a `PolicyConfig` to `AnalyticsAgent` to tighten or loosen the agent's authority:
+
+```python
+from agentic_analytics.policies import PolicyConfig
+
+agent = AnalyticsAgent(
+    db=db,
+    api_key=api_key,
+    policy=PolicyConfig(
+        allowed_tables={"orders", "order_items", "products"},  # default: any table
+        max_steps=8,         # agent turns before it must stop
+        max_sql_attempts=4,  # how many queries it may run
+        row_limit=5000,      # rows returned to user / model
+    ),
+)
 ```
 
 ## License

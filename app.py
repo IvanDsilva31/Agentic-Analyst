@@ -13,7 +13,6 @@ from dotenv import load_dotenv
 
 from agentic_analytics.agent import AnalyticsAgent, ChartSpec
 from agentic_analytics.database import Database
-from agentic_analytics.gemini_client import GeminiClient
 
 load_dotenv()
 
@@ -51,23 +50,26 @@ def render_chart(spec: ChartSpec, df) -> None:
 
 def render_trace(steps) -> None:
     icons = {
-        "schema": "🔍 Inspected schema",
-        "sql": "✍️ Wrote SQL",
-        "error": "⚠️ Query errored",
-        "fix": "🔧 Rewrote query",
-        "result": "📥 Got results",
+        "think": "🧠 Reasoned",
+        "tool_call": "🛠️ Called a tool",
+        "tool_result": "📥 Tool result",
+        "policy_block": "🛡️ Policy blocked",
+        "error": "⚠️ Error",
+        "result": "✅ Finished",
         "answer": "💬 Composed answer",
     }
     for step in steps:
         label = icons.get(step.kind, step.kind)
-        if step.kind in ("sql", "fix"):
-            st.markdown(f"**{label}**")
-            st.code(step.detail, language="sql")
-        elif step.kind == "schema":
-            st.markdown(f"**{label}**")
-            st.code(step.detail, language="text")
+        detail = step.detail
+        # Render run_sql tool calls as a SQL block for readability.
+        if step.kind == "tool_call" and detail.startswith("run_sql:"):
+            st.markdown(f"**{label}** — `run_sql`")
+            st.code(detail.split(":", 1)[1].strip(), language="sql")
+        elif step.kind == "tool_result" and "TABLE " in detail:
+            st.markdown(f"**{label}** — schema")
+            st.code(detail, language="text")
         else:
-            st.markdown(f"**{label}** — {step.detail}")
+            st.markdown(f"**{label}** — {detail}")
 
 
 def main() -> None:
@@ -127,7 +129,7 @@ def main() -> None:
             st.stop()
 
         try:
-            agent = AnalyticsAgent(db=db, llm=GeminiClient(api_key=api_key))
+            agent = AnalyticsAgent(db=db, api_key=api_key)
         except Exception as exc:  # noqa: BLE001
             st.error(str(exc))
             st.stop()
